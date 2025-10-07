@@ -1,0 +1,10 @@
+{
+  "timestamp": "20251006_204514",
+  "logistic_regression_accuracy": 0.7326653306613227,
+  "random_forest_accuracy": 0.6949899799599198,
+  "models_saved": [
+    "baseline_logistic_regression.pkl",
+    "baseline_random_forest.pkl"
+  ],
+  "vectorizer_saved": "tfidf_vectorizer.pkl"
+}
