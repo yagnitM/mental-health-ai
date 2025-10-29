@@ -1,1 +1,24 @@
+# root env
 .env
+# also-ignore any .env files anywhere (optional)
+**/.env
+
+# python caches & compiled files
+__pycache__/
+**/__pycache__/
+*.py[cod]
+
+# backend virtualenv and caches
+backend/venv/
+backend/.venv/
+backend/__pycache__/
+backend/*.pyc
+backend/**/*.pyc
+
+# repo-level venv (you have .venv at root)
+.venv/
+
+# common editor/IDE files
+.vscode/
+.idea/
+*.swp
