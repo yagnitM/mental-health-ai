@@ -191,21 +191,20 @@ async def load_models():
     try:
         current_file = Path(__file__).resolve()
         backend_dir = current_file.parent
-        project_root = backend_dir.parent
-        MODEL_DIR = project_root / "src" / "models"
+        # CHANGED: Models are now in backend/models/ instead of src/models/
+        MODEL_DIR = backend_dir / "models"
         
         print("\n" + "="*60)
         print("🚀 Starting Mental Health AI Backend")
         print("="*60)
         print(f"📂 Backend directory: {backend_dir}")
-        print(f"📂 Project root: {project_root}")
         print(f"📂 Model directory: {MODEL_DIR}")
         print("="*60 + "\n")
         
         if not MODEL_DIR.exists():
             raise FileNotFoundError(
                 f"Model directory not found: {MODEL_DIR}\n"
-                f"Please ensure models are trained and saved in {MODEL_DIR}"
+                f"Please ensure models are copied to {MODEL_DIR}"
             )
         
         required_files = [
@@ -227,7 +226,7 @@ async def load_models():
         if missing_files:
             raise FileNotFoundError(
                 f"Missing model files: {', '.join(missing_files)}\n"
-                f"Please train models first"
+                f"Please copy models to {MODEL_DIR}"
             )
         
         print("📥 Loading models...")
@@ -316,7 +315,7 @@ async def load_models():
     except FileNotFoundError as e:
         print(f"\n❌ Error: {e}")
         print("\n⚠️  Backend will start but predictions will fail!")
-        print("    Please train models first.\n")
+        print("    Please copy models first.\n")
         
     except Exception as e:
         print(f"\n❌ Error loading models: {e}")
