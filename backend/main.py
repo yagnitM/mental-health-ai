@@ -1,31 +1,8 @@
-"""
-Mental Health AI - Complete FastAPI Backend
-============================================
-This is a production-ready FastAPI application for mental health condition detection.
-Place this file in: mental-health-ai/backend/main.py
-
-Directory structure expected:
-mental-health-ai/
-├── backend/
-│   ├── main.py (this file)
-│   └── venv/
-├── src/
-│   └── models/
-│       ├── svc_model.pkl
-│       ├── tfidf_word.pkl
-│       ├── tfidf_char.pkl
-│       ├── lr_sbert.pkl
-│       ├── baseline_logistic_regression.pkl
-│       ├── baseline_random_forest.pkl
-│       └── tfidf_vectorizer.pkl
-└── data/
-"""
-
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from typing import List, Dict, Literal
+from typing import List, Dict, Literal, Optional
 import joblib
 import numpy as np
 from scipy.sparse import hstack
@@ -35,22 +12,19 @@ import sys
 import warnings
 import traceback
 from pathlib import Path
+import shap
+import re
 
 warnings.filterwarnings("ignore")
 
-# ============================================================================
-# FastAPI App Configuration
-# ============================================================================
-
 app = FastAPI(
     title="Mental Health AI Detection API",
-    description="AI-powered mental health condition detection using ensemble learning",
+    description="AI-powered mental health condition detection using ensemble learning with SHAP explainability",
     version="2.0.0",
     docs_url="/docs",
     redoc_url="/redoc"
 )
 
-# CORS Configuration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -66,11 +40,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ============================================================================
-# Global Variables & Constants
-# ============================================================================
-
 models = {}
+explainers = {}
+
 LABELS = [
     'addiction', 'adhd', 'anxiety', 'autism', 'bipolar',
     'bpd', 'depression', 'ocd', 'psychosis', 'ptsd', 'suicide'
@@ -78,7 +50,6 @@ LABELS = [
 ID2LABEL = {i: label for i, label in enumerate(LABELS)}
 LABEL2ID = {label: i for i, label in enumerate(LABELS)}
 
-# Model metadata with actual performance metrics
 MODEL_INFO = {
     "ensemble": {
         "name": "Ensemble (Weighted)",
@@ -113,7 +84,6 @@ MODEL_INFO = {
     }
 }
 
-# Category descriptions for user understanding
 CATEGORY_DESCRIPTIONS = {
     "addiction": "Substance abuse and addictive behaviors",
     "adhd": "Attention Deficit Hyperactivity Disorder - difficulty focusing and hyperactivity",
@@ -127,10 +97,6 @@ CATEGORY_DESCRIPTIONS = {
     "ptsd": "Post-Traumatic Stress Disorder - trauma-related symptoms",
     "suicide": "Suicidal ideation - thoughts of self-harm or suicide"
 }
-
-# ============================================================================
-# Pydantic Models (Request/Response Schemas)
-# ============================================================================
 
 class TextInput(BaseModel):
     text: str = Field(
@@ -162,9 +128,41 @@ class BatchTextInput(BaseModel):
     )
     top_k: int = Field(default=3, ge=1, le=11)
 
+class ExplainInput(BaseModel):
+    text: str = Field(
+        ..., 
+        min_length=10, 
+        max_length=5000,
+        description="Text to explain"
+    )
+    model: Literal["svc", "baseline_lr", "baseline_rf"] = Field(
+        default="svc",
+        description="Model to use for explanation (SHAP not supported for sbert_lr and ensemble)"
+    )
+    max_display: int = Field(
+        default=20,
+        ge=5,
+        le=100,
+        description="Maximum number of features to display in explanation"
+    )
+
 class PredictionResult(BaseModel):
     category: str
     confidence: float
+
+class FeatureImportance(BaseModel):
+    token: str
+    importance: float
+    position: int
+
+class ExplanationResponse(BaseModel):
+    text: str
+    model_used: str
+    predicted_category: str
+    confidence: float
+    base_value: float
+    feature_importances: List[FeatureImportance]
+    explanation_type: str
 
 class PredictionResponse(BaseModel):
     text: str
@@ -183,18 +181,13 @@ class HealthResponse(BaseModel):
     models_loaded: Dict
     categories: List[str]
     total_models: int
-
-# ============================================================================
-# Model Loading
-# ============================================================================
+    explainers_loaded: bool
 
 @app.on_event("startup")
 async def load_models():
-    """Load all ML models and vectorizers on startup"""
-    global models
+    global models, explainers
     
     try:
-        # Determine model directory path
         current_file = Path(__file__).resolve()
         backend_dir = current_file.parent
         project_root = backend_dir.parent
@@ -208,14 +201,12 @@ async def load_models():
         print(f"📂 Model directory: {MODEL_DIR}")
         print("="*60 + "\n")
         
-        # Check if model directory exists
         if not MODEL_DIR.exists():
             raise FileNotFoundError(
                 f"Model directory not found: {MODEL_DIR}\n"
                 f"Please ensure models are trained and saved in {MODEL_DIR}"
             )
         
-        # Required model files
         required_files = [
             "svc_model.pkl",
             "tfidf_word.pkl",
@@ -226,7 +217,6 @@ async def load_models():
             "tfidf_vectorizer.pkl"
         ]
         
-        # Check all required files exist
         missing_files = []
         for filename in required_files:
             filepath = MODEL_DIR / filename
@@ -236,21 +226,16 @@ async def load_models():
         if missing_files:
             raise FileNotFoundError(
                 f"Missing model files: {', '.join(missing_files)}\n"
-                f"Please train models by running:\n"
-                f"  cd {project_root / 'src' / 'models'}\n"
-                f"  python train_baseline_model.py\n"
-                f"  python train_advanced_model.py"
+                f"Please train models first"
             )
         
         print("📥 Loading models...")
         
-        # Load advanced models (SVC)
         print("   Loading SVC model...")
         models['svc'] = joblib.load(MODEL_DIR / "svc_model.pkl")
         models['tfidf_word'] = joblib.load(MODEL_DIR / "tfidf_word.pkl")
         models['tfidf_char'] = joblib.load(MODEL_DIR / "tfidf_char.pkl")
         
-        # Verify vectorizers are fitted
         if not hasattr(models['tfidf_word'], 'vocabulary_'):
             raise ValueError("TF-IDF word vectorizer is not fitted!")
         if not hasattr(models['tfidf_char'], 'vocabulary_'):
@@ -259,33 +244,70 @@ async def load_models():
         print(f"      ✅ Word vocab: {len(models['tfidf_word'].vocabulary_)} features")
         print(f"      ✅ Char vocab: {len(models['tfidf_char'].vocabulary_)} features")
         
-        # Load SBERT model
         print("   Loading SBERT-LR model...")
         models['lr_sbert'] = joblib.load(MODEL_DIR / "lr_sbert.pkl")
         
-        # Load baseline models
         print("   Loading baseline models...")
         models['baseline_lr'] = joblib.load(MODEL_DIR / "baseline_logistic_regression.pkl")
         models['baseline_rf'] = joblib.load(MODEL_DIR / "baseline_random_forest.pkl")
         models['baseline_vectorizer'] = joblib.load(MODEL_DIR / "tfidf_vectorizer.pkl")
         
-        # Verify baseline vectorizer
         if not hasattr(models['baseline_vectorizer'], 'vocabulary_'):
             raise ValueError("Baseline TF-IDF vectorizer is not fitted!")
         print(f"      ✅ Baseline vocab: {len(models['baseline_vectorizer'].vocabulary_)} features")
         
-        # Load SBERT transformer
-        print("   Loading SBERT transformer (this may take a moment)...")
+        print("   Loading SBERT transformer...")
         models['sbert_model'] = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
         
+        print("\n📊 Initializing SHAP explainers...")
+        
+        def create_svc_explainer():
+            def predict_fn(texts):
+                X_word = models['tfidf_word'].transform(texts)
+                X_char = models['tfidf_char'].transform(texts)
+                X_combined = hstack([X_word, X_char])
+                return models['svc'].predict_proba(X_combined)
+            
+            masker = shap.maskers.Text(tokenizer=r"\W+")
+            return shap.Explainer(predict_fn, masker, output_names=LABELS)
+        
+        def create_baseline_lr_explainer():
+            def predict_fn(texts):
+                X = models['baseline_vectorizer'].transform(texts)
+                return models['baseline_lr'].predict_proba(X)
+            
+            masker = shap.maskers.Text(tokenizer=r"\W+")
+            return shap.Explainer(predict_fn, masker, output_names=LABELS)
+        
+        def create_baseline_rf_explainer():
+            def predict_fn(texts):
+                X = models['baseline_vectorizer'].transform(texts)
+                return models['baseline_rf'].predict_proba(X)
+            
+            masker = shap.maskers.Text(tokenizer=r"\W+")
+            return shap.Explainer(predict_fn, masker, output_names=LABELS)
+        
+        print("   Initializing SVC explainer...")
+        explainers['svc'] = create_svc_explainer()
+        print("      ✅ SVC explainer ready")
+        
+        print("   Initializing baseline LR explainer...")
+        explainers['baseline_lr'] = create_baseline_lr_explainer()
+        print("      ✅ Baseline LR explainer ready")
+        
+        print("   Initializing baseline RF explainer...")
+        explainers['baseline_rf'] = create_baseline_rf_explainer()
+        print("      ✅ Baseline RF explainer ready")
+        
         print("\n" + "="*60)
-        print("✅ All models loaded successfully!")
+        print("✅ All models and explainers loaded successfully!")
         print("="*60)
         print(f"   🎯 SVC (Advanced)          - 78% accuracy")
         print(f"   🤖 SBERT-LR (Advanced)     - 71% accuracy")
         print(f"   📊 Baseline LR             - 73% accuracy")
         print(f"   🌳 Baseline RF             - 69% accuracy")
         print(f"   🎭 Ensemble (Weighted)     - 73% accuracy")
+        print(f"   🔍 SHAP Explainers         - 3 models")
         print("="*60)
         print(f"📋 Categories: {', '.join(LABELS)}")
         print("="*60 + "\n")
@@ -301,20 +323,7 @@ async def load_models():
         traceback.print_exc()
         print("\n⚠️  Backend will start but predictions will fail!\n")
 
-# ============================================================================
-# Feature Preparation
-# ============================================================================
-
 def prepare_features(texts: List[str]) -> Dict:
-    """
-    Prepare features for all models from input texts
-    
-    Args:
-        texts: List of text strings to process
-        
-    Returns:
-        Dictionary containing features for each model type
-    """
     if not models:
         raise HTTPException(
             status_code=503, 
@@ -322,12 +331,10 @@ def prepare_features(texts: List[str]) -> Dict:
         )
     
     try:
-        # Advanced TF-IDF features (word + char) for SVC
         X_word = models['tfidf_word'].transform(texts)
         X_char = models['tfidf_char'].transform(texts)
         X_advanced = hstack([X_word, X_char])
         
-        # SBERT embeddings for SBERT-LR
         embeddings = models['sbert_model'].encode(
             texts, 
             batch_size=32, 
@@ -335,7 +342,6 @@ def prepare_features(texts: List[str]) -> Dict:
             show_progress_bar=False
         )
         
-        # Baseline TF-IDF for baseline models
         X_baseline = models['baseline_vectorizer'].transform(texts)
         
         return {
@@ -350,30 +356,13 @@ def prepare_features(texts: List[str]) -> Dict:
             detail=f"Error preparing features: {str(e)}"
         )
 
-# ============================================================================
-# Prediction Functions
-# ============================================================================
-
 def predict_with_model(
     features: Dict, 
     texts: List[str], 
     model_name: str, 
     top_k: int = 3
 ) -> List[Dict]:
-    """
-    Make predictions using specified model
-    
-    Args:
-        features: Pre-computed features dictionary
-        texts: Original text inputs
-        model_name: Name of model to use
-        top_k: Number of top predictions to return
-        
-    Returns:
-        List of prediction dictionaries
-    """
     try:
-        # Get probabilities from selected model
         if model_name == "svc":
             probs = models['svc'].predict_proba(features['advanced'])
             
@@ -387,7 +376,6 @@ def predict_with_model(
             probs = models['baseline_rf'].predict_proba(features['baseline'])
             
         elif model_name == "ensemble":
-            # Weighted ensemble based on validation performance
             weights = MODEL_INFO['ensemble']['weights']
             
             svc_probs = models['svc'].predict_proba(features['advanced'])
@@ -404,7 +392,6 @@ def predict_with_model(
         else:
             raise ValueError(f"Unknown model: {model_name}")
         
-        # Process results for each text
         results = []
         for i, text in enumerate(texts):
             final_probs = probs[i]
@@ -435,18 +422,14 @@ def predict_with_model(
             detail=f"Prediction error: {str(e)}"
         )
 
-# ============================================================================
-# API Endpoints
-# ============================================================================
-
 @app.get("/")
 async def root():
-    """Root endpoint - API status and basic info"""
     return {
         "status": "active",
-        "service": "Mental Health AI Detection API",
+        "service": "Mental Health AI Detection API with SHAP Explainability",
         "version": "2.0.0",
         "models_loaded": len(models) > 0,
+        "explainers_loaded": len(explainers) > 0,
         "available_categories": LABELS,
         "available_models": list(MODEL_INFO.keys()),
         "endpoints": {
@@ -455,6 +438,7 @@ async def root():
             "predict": "/predict",
             "batch_predict": "/predict/batch",
             "compare": "/predict/compare",
+            "explain": "/explain",
             "models": "/models",
             "categories": "/categories"
         }
@@ -462,7 +446,6 @@ async def root():
 
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
-    """Detailed health check with model status"""
     return {
         "status": "healthy" if len(models) > 0 else "unhealthy",
         "models_loaded": {
@@ -476,22 +459,22 @@ async def health_check():
             ])
         },
         "categories": LABELS,
-        "total_models": len(models)
+        "total_models": len(models),
+        "explainers_loaded": len(explainers) > 0
     }
 
 @app.get("/models")
 async def get_models():
-    """Get information about all available models"""
     return {
         "models": MODEL_INFO,
         "total": len(MODEL_INFO),
         "recommendation": "Use 'ensemble' for best overall performance or 'svc' for highest accuracy",
-        "available_models": list(MODEL_INFO.keys())
+        "available_models": list(MODEL_INFO.keys()),
+        "explainable_models": list(explainers.keys()) if explainers else []
     }
 
 @app.get("/categories")
 async def get_categories():
-    """Get all mental health categories with descriptions"""
     return {
         "categories": LABELS,
         "count": len(LABELS),
@@ -500,13 +483,6 @@ async def get_categories():
 
 @app.post("/predict", response_model=PredictionResponse)
 async def predict_single(input_data: TextInput):
-    """
-    Predict mental health condition from text using selected model
-    
-    - **text**: The text to analyze (10-5000 characters)
-    - **model**: Model to use (default: ensemble)
-    - **top_k**: Number of predictions to return (default: 3)
-    """
     if not models:
         raise HTTPException(
             status_code=503, 
@@ -533,11 +509,6 @@ async def predict_single(input_data: TextInput):
 
 @app.post("/predict/batch")
 async def predict_batch(input_data: BatchTextInput):
-    """
-    Batch prediction for multiple texts (max 50)
-    
-    Returns predictions for all texts in a single request
-    """
     if not models:
         raise HTTPException(
             status_code=503, 
@@ -574,11 +545,6 @@ async def predict_batch(input_data: BatchTextInput):
 
 @app.post("/predict/compare", response_model=ModelComparisonResponse)
 async def compare_models(input_data: TextInput):
-    """
-    Compare predictions across all 5 models for the same text
-    
-    Useful for understanding how different models interpret the same input
-    """
     if not models:
         raise HTTPException(
             status_code=503, 
@@ -619,15 +585,73 @@ async def compare_models(input_data: TextInput):
             detail=f"Model comparison failed: {str(e)}"
         )
 
-# ============================================================================
-# Error Handlers
-# ============================================================================
-
-from fastapi.responses import JSONResponse
+@app.post("/explain", response_model=ExplanationResponse)
+async def explain_prediction(input_data: ExplainInput):
+    if not models or not explainers:
+        raise HTTPException(
+            status_code=503,
+            detail="Models or explainers not loaded"
+        )
+    
+    if input_data.model not in explainers:
+        raise HTTPException(
+            status_code=400,
+            detail=f"SHAP explanation not available for model: {input_data.model}. Available models: {list(explainers.keys())}"
+        )
+    
+    try:
+        text = input_data.text
+        explainer = explainers[input_data.model]
+        
+        features = prepare_features([text])
+        results = predict_with_model(features, [text], input_data.model, top_k=1)
+        predicted_category = results[0]['top_prediction']
+        confidence = results[0]['confidence']
+        
+        print(f"Computing SHAP values for: {text[:50]}...")
+        shap_values = explainer([text])
+        
+        predicted_idx = LABEL2ID[predicted_category]
+        
+        tokens = re.split(r"\W+", text.lower())
+        tokens = [t for t in tokens if t]
+        
+        token_shap_values = shap_values[0][:, predicted_idx].values
+        base_value = float(shap_values[0][:, predicted_idx].base_values)
+        
+        feature_importances = []
+        for i, (token, importance) in enumerate(zip(tokens, token_shap_values)):
+            if i >= input_data.max_display:
+                break
+            feature_importances.append({
+                "token": token,
+                "importance": float(importance),
+                "position": i
+            })
+        
+        feature_importances.sort(key=lambda x: abs(x['importance']), reverse=True)
+        feature_importances = feature_importances[:input_data.max_display]
+        
+        return {
+            "text": text,
+            "model_used": input_data.model,
+            "predicted_category": predicted_category,
+            "confidence": confidence,
+            "base_value": base_value,
+            "feature_importances": feature_importances,
+            "explanation_type": "SHAP (Shapley Additive Explanations)"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Explanation failed: {str(e)}\n{traceback.format_exc()}"
+        )
 
 @app.exception_handler(404)
 async def not_found_handler(request, exc):
-    """Custom 404 handler"""
     return JSONResponse(
         status_code=404,
         content={
@@ -635,14 +659,13 @@ async def not_found_handler(request, exc):
             "message": "The requested endpoint does not exist",
             "available_endpoints": [
                 "/", "/health", "/models", "/categories", 
-                "/predict", "/predict/batch", "/predict/compare"
+                "/predict", "/predict/batch", "/predict/compare", "/explain"
             ]
         }
     )
 
 @app.exception_handler(500)
 async def internal_error_handler(request, exc):
-    """Custom 500 handler"""
     return JSONResponse(
         status_code=500,
         content={
@@ -652,20 +675,17 @@ async def internal_error_handler(request, exc):
         }
     )
 
-# ============================================================================
-# Main Entry Point
-# ============================================================================
-
 if __name__ == "__main__":
     import uvicorn
     
     print("\n" + "="*60)
-    print("🚀 Starting Mental Health AI Backend")
+    print("🚀 Starting Mental Health AI Backend with SHAP Explainability")
     print("="*60)
     print("📍 Server will be available at:")
     print("   - Local:   http://localhost:8000")
     print("   - Network: http://0.0.0.0:8000")
     print("   - Docs:    http://localhost:8000/docs")
+    print("   - Explain: http://localhost:8000/explain")
     print("="*60 + "\n")
     
     uvicorn.run(
