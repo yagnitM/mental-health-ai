@@ -1,5 +1,9 @@
 // API Service for Mental Health AI Backend
-const API_BASE_URL = '/api';
+// Works in both development and production
+
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
+console.log('🔧 API Base URL:', API_BASE_URL);
 
 /**
  * Generic fetch wrapper with error handling
