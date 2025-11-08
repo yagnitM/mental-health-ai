@@ -458,6 +458,21 @@ async def get_categories():
         "descriptions": CATEGORY_DESCRIPTIONS
     }
 
+@app.get("/debug/files")
+async def debug_files():
+    try:
+        MODEL_DIR = get_model_dir()
+        files = list(MODEL_DIR.glob("*"))
+        return {
+            "model_dir": str(MODEL_DIR),
+            "exists": MODEL_DIR.exists(),
+            "files": [f.name for f in files] if MODEL_DIR.exists() else [],
+            "file_sizes": {f.name: f.stat().st_size for f in files if f.is_file()} if MODEL_DIR.exists() else {}
+        }
+    except Exception as e:
+        return {"error": str(e), "traceback": traceback.format_exc()}
+    
+
 @app.post("/predict", response_model=PredictionResponse)
 async def predict_single(input_data: TextInput):
     try:
