@@ -1,0 +1,28 @@
+{
+  "label2id": {
+    "addiction": 0,
+    "adhd": 1,
+    "anxiety": 2,
+    "autism": 3,
+    "bipolar": 4,
+    "bpd": 5,
+    "depression": 6,
+    "ocd": 7,
+    "psychosis": 8,
+    "ptsd": 9,
+    "suicide": 10
+  },
+  "id2label": {
+    "0": "addiction",
+    "1": "adhd",
+    "2": "anxiety",
+    "3": "autism",
+    "4": "bipolar",
+    "5": "bpd",
+    "6": "depression",
+    "7": "ocd",
+    "8": "psychosis",
+    "9": "ptsd",
+    "10": "suicide"
+  }
+}

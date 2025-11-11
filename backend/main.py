@@ -15,7 +15,9 @@ from pathlib import Path
 import shap
 import re
 
+
 warnings.filterwarnings("ignore")
+
 
 app = FastAPI(
     title="Mental Health AI Detection API",
@@ -24,6 +26,7 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc"
 )
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -41,8 +44,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 models = {}
 explainers = {}
+
 
 LABELS = [
     'addiction', 'adhd', 'anxiety', 'autism', 'bipolar',
@@ -50,6 +55,7 @@ LABELS = [
 ]
 ID2LABEL = {i: label for i, label in enumerate(LABELS)}
 LABEL2ID = {label: i for i, label in enumerate(LABELS)}
+
 
 MODEL_INFO = {
     "ensemble": {
@@ -85,6 +91,7 @@ MODEL_INFO = {
     }
 }
 
+
 CATEGORY_DESCRIPTIONS = {
     "addiction": "Substance abuse and addictive behaviors",
     "adhd": "Attention Deficit Hyperactivity Disorder - difficulty focusing and hyperactivity",
@@ -98,6 +105,7 @@ CATEGORY_DESCRIPTIONS = {
     "ptsd": "Post-Traumatic Stress Disorder - trauma-related symptoms",
     "suicide": "Suicidal ideation - thoughts of self-harm or suicide"
 }
+
 
 class TextInput(BaseModel):
     text: str = Field(
@@ -118,6 +126,7 @@ class TextInput(BaseModel):
         description="Number of top predictions to return"
     )
 
+
 class BatchTextInput(BaseModel):
     texts: List[str] = Field(
         ..., 
@@ -128,6 +137,7 @@ class BatchTextInput(BaseModel):
         default="ensemble"
     )
     top_k: int = Field(default=3, ge=1, le=11)
+
 
 class ExplainInput(BaseModel):
     text: str = Field(
@@ -147,14 +157,17 @@ class ExplainInput(BaseModel):
         description="Maximum number of features to display in explanation"
     )
 
+
 class PredictionResult(BaseModel):
     category: str
     confidence: float
+
 
 class FeatureImportance(BaseModel):
     token: str
     importance: float
     position: int
+
 
 class ExplanationResponse(BaseModel):
     text: str
@@ -165,6 +178,7 @@ class ExplanationResponse(BaseModel):
     feature_importances: List[FeatureImportance]
     explanation_type: str
 
+
 class PredictionResponse(BaseModel):
     text: str
     model_used: str
@@ -173,9 +187,11 @@ class PredictionResponse(BaseModel):
     confidence: float
     model_info: Dict
 
+
 class ModelComparisonResponse(BaseModel):
     text: str
     results: Dict[str, Dict]
+
 
 class HealthResponse(BaseModel):
     status: str
@@ -184,6 +200,7 @@ class HealthResponse(BaseModel):
     total_models: int
     explainers_loaded: bool
 
+
 @app.on_event("startup")
 async def load_models():
     global models, explainers
@@ -191,8 +208,8 @@ async def load_models():
     try:
         current_file = Path(__file__).resolve()
         backend_dir = current_file.parent
-        # CHANGED: Models are now in backend/models/ instead of src/models/
-        MODEL_DIR = backend_dir / "models"
+        # CHANGED: Models are now in backend/src/models/
+        MODEL_DIR = backend_dir / "src" / "models"
         
         print("\n" + "="*60)
         print("🚀 Starting Mental Health AI Backend")
@@ -323,6 +340,7 @@ async def load_models():
         traceback.print_exc()
         print("\n⚠️  Backend will start but predictions will fail!\n")
 
+
 def prepare_features(texts: List[str]) -> Dict:
     if not models:
         raise HTTPException(
@@ -355,6 +373,7 @@ def prepare_features(texts: List[str]) -> Dict:
             status_code=500,
             detail=f"Error preparing features: {str(e)}"
         )
+
 
 def predict_with_model(
     features: Dict, 
@@ -422,6 +441,7 @@ def predict_with_model(
             detail=f"Prediction error: {str(e)}"
         )
 
+
 @app.get("/")
 async def root():
     return {
@@ -444,6 +464,7 @@ async def root():
         }
     }
 
+
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
     return {
@@ -463,6 +484,7 @@ async def health_check():
         "explainers_loaded": len(explainers) > 0
     }
 
+
 @app.get("/models")
 async def get_models():
     return {
@@ -473,6 +495,7 @@ async def get_models():
         "explainable_models": list(explainers.keys()) if explainers else []
     }
 
+
 @app.get("/categories")
 async def get_categories():
     return {
@@ -480,6 +503,7 @@ async def get_categories():
         "count": len(LABELS),
         "descriptions": CATEGORY_DESCRIPTIONS
     }
+
 
 @app.post("/predict", response_model=PredictionResponse)
 async def predict_single(input_data: TextInput):
@@ -506,6 +530,7 @@ async def predict_single(input_data: TextInput):
             status_code=500, 
             detail=f"Prediction failed: {str(e)}"
         )
+
 
 @app.post("/predict/batch")
 async def predict_batch(input_data: BatchTextInput):
@@ -542,6 +567,7 @@ async def predict_batch(input_data: BatchTextInput):
             status_code=500, 
             detail=f"Batch prediction failed: {str(e)}"
         )
+
 
 @app.post("/predict/compare", response_model=ModelComparisonResponse)
 async def compare_models(input_data: TextInput):
@@ -584,6 +610,7 @@ async def compare_models(input_data: TextInput):
             status_code=500, 
             detail=f"Model comparison failed: {str(e)}"
         )
+
 
 @app.post("/explain", response_model=ExplanationResponse)
 async def explain_prediction(input_data: ExplainInput):
@@ -650,6 +677,7 @@ async def explain_prediction(input_data: ExplainInput):
             detail=f"Explanation failed: {str(e)}\n{traceback.format_exc()}"
         )
 
+
 @app.exception_handler(404)
 async def not_found_handler(request, exc):
     return JSONResponse(
@@ -664,6 +692,7 @@ async def not_found_handler(request, exc):
         }
     )
 
+
 @app.exception_handler(500)
 async def internal_error_handler(request, exc):
     return JSONResponse(
@@ -674,6 +703,7 @@ async def internal_error_handler(request, exc):
             "suggestion": "If models are not loaded, try retraining them."
         }
     )
+
 
 if __name__ == "__main__":
     import uvicorn
