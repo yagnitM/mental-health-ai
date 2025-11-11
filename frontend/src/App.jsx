@@ -11,7 +11,6 @@ function App() {
   const [isCompare, setIsCompare] = useState(false);
   const [backendStatus, setBackendStatus] = useState('checking');
 
-  // Check backend health on mount
   useEffect(() => {
     checkHealth()
       .then(() => setBackendStatus('connected'))
@@ -54,7 +53,6 @@ function App() {
         </div>
       </header>
 
-      {/* Main Content */}
       <main className="app-main">
         <div className="container">
           {backendStatus === 'disconnected' && (
