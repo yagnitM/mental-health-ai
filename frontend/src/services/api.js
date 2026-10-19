@@ -1,61 +1,139 @@
-// API Service for Mental Health AI Backend
-// Works in both development and production
+/**
+ * API Service for Mental Health AI Backend
+ * Supports local development and production deployment.
+ *
+ * Local development:
+ *   VITE_API_URL=http://localhost:8000
+ *
+ * Production:
+ *   VITE_API_URL=https://your-backend.onrender.com
+ */
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const API_BASE_URL = (
+  import.meta.env.VITE_API_URL ||
+  (import.meta.env.DEV ? 'http://localhost:8000' : '')
+).replace(/\/+$/, '');
 
-console.log('🔧 API Base URL:', API_BASE_URL);
+// Validate configuration early.
+if (!API_BASE_URL) {
+  console.error(
+    '[API] VITE_API_URL is missing. Configure it in Vercel Environment Variables and redeploy.'
+  );
+} else {
+  console.info('[API] Base URL:', API_BASE_URL);
+}
 
 /**
- * Generic fetch wrapper with error handling
+ * Build a useful error message from an API response.
+ */
+async function getErrorMessage(response) {
+  const contentType = response.headers.get('content-type') || '';
+
+  if (contentType.includes('application/json')) {
+    try {
+      const data = await response.json();
+
+      if (typeof data.detail === 'string') {
+        return data.detail;
+      }
+
+      if (typeof data.error === 'string') {
+        return data.error;
+      }
+
+      if (Array.isArray(data.detail)) {
+        return data.detail
+          .map((item) => item.msg || JSON.stringify(item))
+          .join('; ');
+      }
+
+      return JSON.stringify(data);
+    } catch {
+      // Fall through to the HTTP status message.
+    }
+  }
+
+  return response.statusText || 'The server returned an error.';
+}
+
+/**
+ * Generic fetch wrapper.
  */
 async function apiFetch(endpoint, options = {}) {
+  if (!API_BASE_URL) {
+    throw new Error(
+      'API URL is not configured. Set VITE_API_URL in your deployment settings.'
+    );
+  }
+
+  const url = `${API_BASE_URL}${endpoint}`;
+
   try {
-    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+    const response = await fetch(url, {
+      ...options,
       headers: {
-        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        ...(options.body ? { 'Content-Type': 'application/json' } : {}),
         ...options.headers,
       },
-      ...options,
     });
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.detail || `HTTP ${response.status}: ${response.statusText}`);
+      const message = await getErrorMessage(response);
+
+      throw new Error(
+        `${response.status} ${response.statusText}: ${message}`
+      );
     }
 
     return await response.json();
   } catch (error) {
-    console.error(`API Error [${endpoint}]:`, error);
+    if (error instanceof TypeError) {
+      console.error(`[API] Network error: ${url}`, error);
+
+      throw new Error(
+        'Could not connect to the backend. Check the backend URL, service availability, and CORS configuration.'
+      );
+    }
+
+    console.error(`[API] Request failed: ${url}`, error);
     throw error;
   }
 }
 
 /**
- * Health check
+ * Check backend health.
  */
 export async function checkHealth() {
-  return apiFetch('/health');
+  const health = await apiFetch('/health');
+
+  if (health.status !== 'healthy') {
+    throw new Error('The backend responded but is not reporting healthy status.');
+  }
+
+  return health;
 }
 
 /**
- * Get all available models
+ * Get available models.
  */
 export async function getModels() {
   return apiFetch('/models');
 }
 
 /**
- * Get all mental health categories
+ * Get mental health categories.
  */
 export async function getCategories() {
   return apiFetch('/categories');
 }
 
 /**
- * Make a single prediction
+ * Make a single prediction.
+ *
  * @param {string} text - Text to analyze
- * @param {string} model - Model name (default: 'ensemble')
- * @param {number} topK - Number of predictions to return (default: 3)
+ * @param {'svc' | 'ensemble'} model - Model to use
+ * @param {number} topK - Number of predictions to return
  */
 export async function predict(text, model = 'ensemble', topK = 3) {
   return apiFetch('/predict', {
@@ -69,7 +147,8 @@ export async function predict(text, model = 'ensemble', topK = 3) {
 }
 
 /**
- * Compare predictions across all models
+ * Compare predictions across models.
+ *
  * @param {string} text - Text to analyze
  */
 export async function compareModels(text) {
@@ -77,16 +156,17 @@ export async function compareModels(text) {
     method: 'POST',
     body: JSON.stringify({
       text,
-      model: 'ensemble', // Required but not used in comparison
+      model: 'ensemble',
       top_k: 3,
     }),
   });
 }
 
 /**
- * Batch prediction for multiple texts
- * @param {string[]} texts - Array of texts to analyze
- * @param {string} model - Model name (default: 'ensemble')
+ * Run predictions on multiple texts.
+ *
+ * @param {string[]} texts - Texts to analyze
+ * @param {'svc' | 'ensemble'} model - Model to use
  */
 export async function predictBatch(texts, model = 'ensemble') {
   return apiFetch('/predict/batch', {
