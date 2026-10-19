@@ -56,12 +56,13 @@ function App() {
       <main className="app-main">
         <div className="container">
           {backendStatus === 'disconnected' && (
-            <div className="alert alert-error">
-              <strong>Backend Offline</strong>
-              <p>Please make sure the backend is running on http://localhost:8000</p>
-              <code>cd backend && python main.py</code>
-            </div>
-          )}
+  <div className="alert alert-error">
+    <strong>Backend Connection Failed</strong>
+    <p>
+      Unable to connect to the AI service. Please try again later.
+    </p>
+  </div>
+)}
 
           <PredictionForm onSubmit={handleSubmit} isLoading={isLoading} />
 
